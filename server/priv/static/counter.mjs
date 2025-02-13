@@ -39,6 +39,7 @@ var List = class {
     }
     return desired === 0;
   }
+  // @internal
   countLength() {
     let length4 = 0;
     for (let _ of this)
@@ -46,9 +47,6 @@ var List = class {
     return length4;
   }
 };
-function prepend(element3, tail) {
-  return new NonEmpty(element3, tail);
-}
 function toList(elements, tail) {
   return List.fromArray(elements, tail);
 }
@@ -92,32 +90,83 @@ var BitArray = class _BitArray {
     return this.buffer[index2];
   }
   // @internal
-  floatAt(index2) {
-    return byteArrayToFloat(this.buffer.slice(index2, index2 + 8));
+  floatFromSlice(start3, end, isBigEndian) {
+    return byteArrayToFloat(this.buffer, start3, end, isBigEndian);
   }
   // @internal
-  intFromSlice(start3, end) {
-    return byteArrayToInt(this.buffer.slice(start3, end));
+  intFromSlice(start3, end, isBigEndian, isSigned) {
+    return byteArrayToInt(this.buffer, start3, end, isBigEndian, isSigned);
   }
   // @internal
   binaryFromSlice(start3, end) {
-    return new _BitArray(this.buffer.slice(start3, end));
+    const buffer = new Uint8Array(
+      this.buffer.buffer,
+      this.buffer.byteOffset + start3,
+      end - start3
+    );
+    return new _BitArray(buffer);
   }
   // @internal
   sliceAfter(index2) {
-    return new _BitArray(this.buffer.slice(index2));
+    const buffer = new Uint8Array(
+      this.buffer.buffer,
+      this.buffer.byteOffset + index2,
+      this.buffer.byteLength - index2
+    );
+    return new _BitArray(buffer);
   }
 };
-function byteArrayToInt(byteArray) {
-  byteArray = byteArray.reverse();
-  let value = 0;
-  for (let i = byteArray.length - 1; i >= 0; i--) {
-    value = value * 256 + byteArray[i];
+function byteArrayToInt(byteArray, start3, end, isBigEndian, isSigned) {
+  const byteSize = end - start3;
+  if (byteSize <= 6) {
+    let value = 0;
+    if (isBigEndian) {
+      for (let i = start3; i < end; i++) {
+        value = value * 256 + byteArray[i];
+      }
+    } else {
+      for (let i = end - 1; i >= start3; i--) {
+        value = value * 256 + byteArray[i];
+      }
+    }
+    if (isSigned) {
+      const highBit = 2 ** (byteSize * 8 - 1);
+      if (value >= highBit) {
+        value -= highBit * 2;
+      }
+    }
+    return value;
+  } else {
+    let value = 0n;
+    if (isBigEndian) {
+      for (let i = start3; i < end; i++) {
+        value = (value << 8n) + BigInt(byteArray[i]);
+      }
+    } else {
+      for (let i = end - 1; i >= start3; i--) {
+        value = (value << 8n) + BigInt(byteArray[i]);
+      }
+    }
+    if (isSigned) {
+      const highBit = 1n << BigInt(byteSize * 8 - 1);
+      if (value >= highBit) {
+        value -= highBit * 2n;
+      }
+    }
+    return Number(value);
   }
-  return value;
 }
-function byteArrayToFloat(byteArray) {
-  return new Float64Array(byteArray.reverse().buffer)[0];
+function byteArrayToFloat(byteArray, start3, end, isBigEndian) {
+  const view2 = new DataView(byteArray.buffer);
+  const byteSize = end - start3;
+  if (byteSize === 8) {
+    return view2.getFloat64(start3, !isBigEndian);
+  } else if (byteSize === 4) {
+    return view2.getFloat32(start3, !isBigEndian);
+  } else {
+    const msg = `Sized floats must be 32-bit or 64-bit on JavaScript, got size of ${byteSize * 8} bits`;
+    throw new globalThis.Error(msg);
+  }
 }
 var Result = class _Result extends CustomType {
   // @internal
@@ -218,8 +267,6 @@ var Some = class extends CustomType {
     super();
     this[0] = x0;
   }
-};
-var None = class extends CustomType {
 };
 
 // build/dev/javascript/gleam_stdlib/dict.mjs
@@ -921,18 +968,12 @@ var Dict = class _Dict {
 
 // build/dev/javascript/gleam_stdlib/gleam_stdlib.mjs
 var Nil = void 0;
-function identity(x) {
-  return x;
-}
 function parse_int(value) {
   if (/^[-+]?(\d+)$/.test(value)) {
     return new Ok(parseInt(value));
   } else {
     return new Error(Nil);
   }
-}
-function to_string(term) {
-  return term.toString();
 }
 function new_map() {
   return Dict.new();
@@ -1012,9 +1053,6 @@ function from_list(list3) {
 function parse(string3) {
   return parse_int(string3);
 }
-function to_string2(x) {
-  return to_string(x);
-}
 
 // build/dev/javascript/gleam_stdlib/gleam/result.mjs
 function map(result, fun) {
@@ -1053,9 +1091,6 @@ var DecodeError = class extends CustomType {
     this.path = path;
   }
 };
-function from(a) {
-  return identity(a);
-}
 function string(data) {
   return decode_string(data);
 }
@@ -1130,35 +1165,6 @@ var Element = class extends CustomType {
     this.void = void$;
   }
 };
-var Attribute = class extends CustomType {
-  constructor(x0, x1, as_property) {
-    super();
-    this[0] = x0;
-    this[1] = x1;
-    this.as_property = as_property;
-  }
-};
-var Event = class extends CustomType {
-  constructor(x0, x1) {
-    super();
-    this[0] = x0;
-    this[1] = x1;
-  }
-};
-
-// build/dev/javascript/lustre/lustre/attribute.mjs
-function attribute(name2, value) {
-  return new Attribute(name2, from(value), false);
-}
-function on(name2, handler) {
-  return new Event("on" + name2, handler);
-}
-function class$(name2) {
-  return attribute("class", name2);
-}
-function type_(name2) {
-  return attribute("type", name2);
-}
 
 // build/dev/javascript/lustre/lustre/element.mjs
 function element(tag2, attrs, children) {
@@ -1223,9 +1229,9 @@ var ForceModel = class extends CustomType {
 // build/dev/javascript/lustre/vdom.ffi.mjs
 function morph(prev, next, dispatch, isComponent = false) {
   let out;
-  let stack3 = [{ prev, next, parent: prev.parentNode }];
-  while (stack3.length) {
-    let { prev: prev2, next: next2, parent } = stack3.pop();
+  let stack2 = [{ prev, next, parent: prev.parentNode }];
+  while (stack2.length) {
+    let { prev: prev2, next: next2, parent } = stack2.pop();
     if (next2.subtree !== void 0)
       next2 = next2.subtree();
     if (next2.content !== void 0) {
@@ -1247,7 +1253,7 @@ function morph(prev, next, dispatch, isComponent = false) {
         prev: prev2,
         next: next2,
         dispatch,
-        stack: stack3,
+        stack: stack2,
         isComponent
       });
       if (!prev2) {
@@ -1258,16 +1264,16 @@ function morph(prev, next, dispatch, isComponent = false) {
       out ??= created;
     } else if (next2.elements !== void 0) {
       iterateElement(next2, (fragmentElement) => {
-        stack3.unshift({ prev: prev2, next: fragmentElement, parent });
+        stack2.unshift({ prev: prev2, next: fragmentElement, parent });
         prev2 = prev2?.nextSibling;
       });
     } else if (next2.subtree !== void 0) {
-      stack3.push({ prev: prev2, next: next2, parent });
+      stack2.push({ prev: prev2, next: next2, parent });
     }
   }
   return out;
 }
-function createElementNode({ prev, next, dispatch, stack: stack3 }) {
+function createElementNode({ prev, next, dispatch, stack: stack2 }) {
   const namespace = next.namespace || "http://www.w3.org/1999/xhtml";
   const canMorph = prev && prev.nodeType === Node.ELEMENT_NODE && prev.localName === next.tag && prev.namespaceURI === (next.namespace || "http://www.w3.org/1999/xhtml");
   const el2 = canMorph ? prev : namespace ? document.createElementNS(namespace, next.tag) : document.createElement(next.tag);
@@ -1368,13 +1374,13 @@ function createElementNode({ prev, next, dispatch, stack: stack3 }) {
           prevChild,
           currElement,
           el2,
-          stack3,
+          stack2,
           incomingKeyedChildren,
           keyedChildren,
           seenKeys
         );
       } else {
-        stack3.unshift({ prev: prevChild, next: currElement, parent: el2 });
+        stack2.unshift({ prev: prevChild, next: currElement, parent: el2 });
         prevChild = prevChild?.nextSibling;
       }
     });
@@ -1444,7 +1450,7 @@ function getKeyedChildren(el2) {
   }
   return keyedChildren;
 }
-function diffKeyedChild(prevChild, child, el2, stack3, incomingKeyedChildren, keyedChildren, seenKeys) {
+function diffKeyedChild(prevChild, child, el2, stack2, incomingKeyedChildren, keyedChildren, seenKeys) {
   while (prevChild && !incomingKeyedChildren.has(prevChild.getAttribute("data-lustre-key"))) {
     const nextChild = prevChild.nextSibling;
     el2.removeChild(prevChild);
@@ -1452,35 +1458,35 @@ function diffKeyedChild(prevChild, child, el2, stack3, incomingKeyedChildren, ke
   }
   if (keyedChildren.size === 0) {
     iterateElement(child, (currChild) => {
-      stack3.unshift({ prev: prevChild, next: currChild, parent: el2 });
+      stack2.unshift({ prev: prevChild, next: currChild, parent: el2 });
       prevChild = prevChild?.nextSibling;
     });
     return prevChild;
   }
   if (seenKeys.has(child.key)) {
     console.warn(`Duplicate key found in Lustre vnode: ${child.key}`);
-    stack3.unshift({ prev: null, next: child, parent: el2 });
+    stack2.unshift({ prev: null, next: child, parent: el2 });
     return prevChild;
   }
   seenKeys.add(child.key);
   const keyedChild = keyedChildren.get(child.key);
   if (!keyedChild && !prevChild) {
-    stack3.unshift({ prev: null, next: child, parent: el2 });
+    stack2.unshift({ prev: null, next: child, parent: el2 });
     return prevChild;
   }
   if (!keyedChild && prevChild !== null) {
     const placeholder = document.createTextNode("");
     el2.insertBefore(placeholder, prevChild);
-    stack3.unshift({ prev: placeholder, next: child, parent: el2 });
+    stack2.unshift({ prev: placeholder, next: child, parent: el2 });
     return prevChild;
   }
   if (!keyedChild || keyedChild === prevChild) {
-    stack3.unshift({ prev: prevChild, next: child, parent: el2 });
+    stack2.unshift({ prev: prevChild, next: child, parent: el2 });
     prevChild = prevChild?.nextSibling;
     return prevChild;
   }
   el2.insertBefore(keyedChild, prevChild);
-  stack3.unshift({ prev: keyedChild, next: child, parent: el2 });
+  stack2.unshift({ prev: keyedChild, next: child, parent: el2 });
   return prevChild;
 }
 function iterateElement(element3, processElement) {
@@ -1713,519 +1719,6 @@ function makeComponent(init3, update3, view2, on_attribute_change2) {
   };
 }
 
-// build/dev/javascript/birl/birl/duration.mjs
-var MicroSecond = class extends CustomType {
-};
-var MilliSecond = class extends CustomType {
-};
-var Second = class extends CustomType {
-};
-var Minute = class extends CustomType {
-};
-var Hour = class extends CustomType {
-};
-var Day = class extends CustomType {
-};
-var Week = class extends CustomType {
-};
-var Month = class extends CustomType {
-};
-var Year = class extends CustomType {
-};
-var milli_second = 1e3;
-var second = 1e6;
-var minute = 6e7;
-var hour = 36e8;
-var day = 864e8;
-var week = 6048e8;
-var month = 2592e9;
-var year = 31536e9;
-var unit_values = toList([
-  [new Year(), year],
-  [new Month(), month],
-  [new Week(), week],
-  [new Day(), day],
-  [new Hour(), hour],
-  [new Minute(), minute],
-  [new Second(), second],
-  [new MilliSecond(), milli_second],
-  [new MicroSecond(), 1]
-]);
-var year_units = toList(["y", "year", "years"]);
-var month_units = toList(["mon", "month", "months"]);
-var week_units = toList(["w", "week", "weeks"]);
-var day_units = toList(["d", "day", "days"]);
-var hour_units = toList(["h", "hour", "hours"]);
-var minute_units = toList(["m", "min", "minute", "minutes"]);
-var second_units = toList(["s", "sec", "secs", "second", "seconds"]);
-var milli_second_units = toList([
-  "ms",
-  "msec",
-  "msecs",
-  "millisecond",
-  "milliseconds",
-  "milli-second",
-  "milli-seconds",
-  "milli_second",
-  "milli_seconds"
-]);
-var units = toList([
-  [new Year(), year_units],
-  [new Month(), month_units],
-  [new Week(), week_units],
-  [new Day(), day_units],
-  [new Hour(), hour_units],
-  [new Minute(), minute_units],
-  [new Second(), second_units],
-  [new MilliSecond(), milli_second_units]
-]);
-
-// build/dev/javascript/birl/birl/zones.mjs
-var list = toList([
-  ["Africa/Abidjan", 0],
-  ["Africa/Algiers", 3600],
-  ["Africa/Bissau", 0],
-  ["Africa/Cairo", 7200],
-  ["Africa/Casablanca", 3600],
-  ["Africa/Ceuta", 3600],
-  ["Africa/El_Aaiun", 3600],
-  ["Africa/Johannesburg", 7200],
-  ["Africa/Juba", 7200],
-  ["Africa/Khartoum", 7200],
-  ["Africa/Lagos", 3600],
-  ["Africa/Maputo", 7200],
-  ["Africa/Monrovia", 0],
-  ["Africa/Nairobi", 10800],
-  ["Africa/Ndjamena", 3600],
-  ["Africa/Sao_Tome", 0],
-  ["Africa/Tripoli", 7200],
-  ["Africa/Tunis", 3600],
-  ["Africa/Windhoek", 7200],
-  ["America/Adak", -36e3],
-  ["America/Anchorage", -32400],
-  ["America/Araguaina", -10800],
-  ["America/Argentina/Buenos_Aires", -10800],
-  ["America/Argentina/Catamarca", -10800],
-  ["America/Argentina/Cordoba", -10800],
-  ["America/Argentina/Jujuy", -10800],
-  ["America/Argentina/La_Rioja", -10800],
-  ["America/Argentina/Mendoza", -10800],
-  ["America/Argentina/Rio_Gallegos", -10800],
-  ["America/Argentina/Salta", -10800],
-  ["America/Argentina/San_Juan", -10800],
-  ["America/Argentina/San_Luis", -10800],
-  ["America/Argentina/Tucuman", -10800],
-  ["America/Argentina/Ushuaia", -10800],
-  ["America/Asuncion", -14400],
-  ["America/Bahia", -10800],
-  ["America/Bahia_Banderas", -21600],
-  ["America/Barbados", -14400],
-  ["America/Belem", -10800],
-  ["America/Belize", -21600],
-  ["America/Boa_Vista", -14400],
-  ["America/Bogota", -18e3],
-  ["America/Boise", -25200],
-  ["America/Cambridge_Bay", -25200],
-  ["America/Campo_Grande", -14400],
-  ["America/Cancun", -18e3],
-  ["America/Caracas", -14400],
-  ["America/Cayenne", -10800],
-  ["America/Chicago", -21600],
-  ["America/Chihuahua", -21600],
-  ["America/Ciudad_Juarez", -25200],
-  ["America/Costa_Rica", -21600],
-  ["America/Cuiaba", -14400],
-  ["America/Danmarkshavn", 0],
-  ["America/Dawson", -25200],
-  ["America/Dawson_Creek", -25200],
-  ["America/Denver", -25200],
-  ["America/Detroit", -18e3],
-  ["America/Edmonton", -25200],
-  ["America/Eirunepe", -18e3],
-  ["America/El_Salvador", -21600],
-  ["America/Fort_Nelson", -25200],
-  ["America/Fortaleza", -10800],
-  ["America/Glace_Bay", -14400],
-  ["America/Goose_Bay", -14400],
-  ["America/Grand_Turk", -18e3],
-  ["America/Guatemala", -21600],
-  ["America/Guayaquil", -18e3],
-  ["America/Guyana", -14400],
-  ["America/Halifax", -14400],
-  ["America/Havana", -18e3],
-  ["America/Hermosillo", -25200],
-  ["America/Indiana/Indianapolis", -18e3],
-  ["America/Indiana/Knox", -21600],
-  ["America/Indiana/Marengo", -18e3],
-  ["America/Indiana/Petersburg", -18e3],
-  ["America/Indiana/Tell_City", -21600],
-  ["America/Indiana/Vevay", -18e3],
-  ["America/Indiana/Vincennes", -18e3],
-  ["America/Indiana/Winamac", -18e3],
-  ["America/Inuvik", -25200],
-  ["America/Iqaluit", -18e3],
-  ["America/Jamaica", -18e3],
-  ["America/Juneau", -32400],
-  ["America/Kentucky/Louisville", -18e3],
-  ["America/Kentucky/Monticello", -18e3],
-  ["America/La_Paz", -14400],
-  ["America/Lima", -18e3],
-  ["America/Los_Angeles", -28800],
-  ["America/Maceio", -10800],
-  ["America/Managua", -21600],
-  ["America/Manaus", -14400],
-  ["America/Martinique", -14400],
-  ["America/Matamoros", -21600],
-  ["America/Mazatlan", -25200],
-  ["America/Menominee", -21600],
-  ["America/Merida", -21600],
-  ["America/Metlakatla", -32400],
-  ["America/Mexico_City", -21600],
-  ["America/Miquelon", -10800],
-  ["America/Moncton", -14400],
-  ["America/Monterrey", -21600],
-  ["America/Montevideo", -10800],
-  ["America/New_York", -18e3],
-  ["America/Nome", -32400],
-  ["America/Noronha", -7200],
-  ["America/North_Dakota/Beulah", -21600],
-  ["America/North_Dakota/Center", -21600],
-  ["America/North_Dakota/New_Salem", -21600],
-  ["America/Nuuk", -7200],
-  ["America/Ojinaga", -21600],
-  ["America/Panama", -18e3],
-  ["America/Paramaribo", -10800],
-  ["America/Phoenix", -25200],
-  ["America/Port-au-Prince", -18e3],
-  ["America/Porto_Velho", -14400],
-  ["America/Puerto_Rico", -14400],
-  ["America/Punta_Arenas", -10800],
-  ["America/Rankin_Inlet", -21600],
-  ["America/Recife", -10800],
-  ["America/Regina", -21600],
-  ["America/Resolute", -21600],
-  ["America/Rio_Branco", -18e3],
-  ["America/Santarem", -10800],
-  ["America/Santiago", -14400],
-  ["America/Santo_Domingo", -14400],
-  ["America/Sao_Paulo", -10800],
-  ["America/Scoresbysund", -7200],
-  ["America/Sitka", -32400],
-  ["America/St_Johns", -12600],
-  ["America/Swift_Current", -21600],
-  ["America/Tegucigalpa", -21600],
-  ["America/Thule", -14400],
-  ["America/Tijuana", -28800],
-  ["America/Toronto", -18e3],
-  ["America/Vancouver", -28800],
-  ["America/Whitehorse", -25200],
-  ["America/Winnipeg", -21600],
-  ["America/Yakutat", -32400],
-  ["Antarctica/Casey", 28800],
-  ["Antarctica/Davis", 25200],
-  ["Antarctica/Macquarie", 36e3],
-  ["Antarctica/Mawson", 18e3],
-  ["Antarctica/Palmer", -10800],
-  ["Antarctica/Rothera", -10800],
-  ["Antarctica/Troll", 0],
-  ["Antarctica/Vostok", 18e3],
-  ["Asia/Almaty", 18e3],
-  ["Asia/Amman", 10800],
-  ["Asia/Anadyr", 43200],
-  ["Asia/Aqtau", 18e3],
-  ["Asia/Aqtobe", 18e3],
-  ["Asia/Ashgabat", 18e3],
-  ["Asia/Atyrau", 18e3],
-  ["Asia/Baghdad", 10800],
-  ["Asia/Baku", 14400],
-  ["Asia/Bangkok", 25200],
-  ["Asia/Barnaul", 25200],
-  ["Asia/Beirut", 7200],
-  ["Asia/Bishkek", 21600],
-  ["Asia/Chita", 32400],
-  ["Asia/Choibalsan", 28800],
-  ["Asia/Colombo", 19800],
-  ["Asia/Damascus", 10800],
-  ["Asia/Dhaka", 21600],
-  ["Asia/Dili", 32400],
-  ["Asia/Dubai", 14400],
-  ["Asia/Dushanbe", 18e3],
-  ["Asia/Famagusta", 7200],
-  ["Asia/Gaza", 7200],
-  ["Asia/Hebron", 7200],
-  ["Asia/Ho_Chi_Minh", 25200],
-  ["Asia/Hong_Kong", 28800],
-  ["Asia/Hovd", 25200],
-  ["Asia/Irkutsk", 28800],
-  ["Asia/Jakarta", 25200],
-  ["Asia/Jayapura", 32400],
-  ["Asia/Jerusalem", 7200],
-  ["Asia/Kabul", 16200],
-  ["Asia/Kamchatka", 43200],
-  ["Asia/Karachi", 18e3],
-  ["Asia/Kathmandu", 20700],
-  ["Asia/Khandyga", 32400],
-  ["Asia/Kolkata", 19800],
-  ["Asia/Krasnoyarsk", 25200],
-  ["Asia/Kuching", 28800],
-  ["Asia/Macau", 28800],
-  ["Asia/Magadan", 39600],
-  ["Asia/Makassar", 28800],
-  ["Asia/Manila", 28800],
-  ["Asia/Nicosia", 7200],
-  ["Asia/Novokuznetsk", 25200],
-  ["Asia/Novosibirsk", 25200],
-  ["Asia/Omsk", 21600],
-  ["Asia/Oral", 18e3],
-  ["Asia/Pontianak", 25200],
-  ["Asia/Pyongyang", 32400],
-  ["Asia/Qatar", 10800],
-  ["Asia/Qostanay", 18e3],
-  ["Asia/Qyzylorda", 18e3],
-  ["Asia/Riyadh", 10800],
-  ["Asia/Sakhalin", 39600],
-  ["Asia/Samarkand", 18e3],
-  ["Asia/Seoul", 32400],
-  ["Asia/Shanghai", 28800],
-  ["Asia/Singapore", 28800],
-  ["Asia/Srednekolymsk", 39600],
-  ["Asia/Taipei", 28800],
-  ["Asia/Tashkent", 18e3],
-  ["Asia/Tbilisi", 14400],
-  ["Asia/Tehran", 12600],
-  ["Asia/Thimphu", 21600],
-  ["Asia/Tokyo", 32400],
-  ["Asia/Tomsk", 25200],
-  ["Asia/Ulaanbaatar", 28800],
-  ["Asia/Urumqi", 21600],
-  ["Asia/Ust-Nera", 36e3],
-  ["Asia/Vladivostok", 36e3],
-  ["Asia/Yakutsk", 32400],
-  ["Asia/Yangon", 23400],
-  ["Asia/Yekaterinburg", 18e3],
-  ["Asia/Yerevan", 14400],
-  ["Atlantic/Azores", -3600],
-  ["Atlantic/Bermuda", -14400],
-  ["Atlantic/Canary", 0],
-  ["Atlantic/Cape_Verde", -3600],
-  ["Atlantic/Faroe", 0],
-  ["Atlantic/Madeira", 0],
-  ["Atlantic/South_Georgia", -7200],
-  ["Atlantic/Stanley", -10800],
-  ["Australia/Adelaide", 34200],
-  ["Australia/Brisbane", 36e3],
-  ["Australia/Broken_Hill", 34200],
-  ["Australia/Darwin", 34200],
-  ["Australia/Eucla", 31500],
-  ["Australia/Hobart", 36e3],
-  ["Australia/Lindeman", 36e3],
-  ["Australia/Lord_Howe", 37800],
-  ["Australia/Melbourne", 36e3],
-  ["Australia/Perth", 28800],
-  ["Australia/Sydney", 36e3],
-  ["CET", 3600],
-  ["CST6CDT", -21600],
-  ["EET", 7200],
-  ["EST", -18e3],
-  ["EST5EDT", -18e3],
-  ["Etc/GMT", 0],
-  ["Etc/GMT+1", -3600],
-  ["Etc/GMT+10", -36e3],
-  ["Etc/GMT+11", -39600],
-  ["Etc/GMT+12", -43200],
-  ["Etc/GMT+2", -7200],
-  ["Etc/GMT+3", -10800],
-  ["Etc/GMT+4", -14400],
-  ["Etc/GMT+5", -18e3],
-  ["Etc/GMT+6", -21600],
-  ["Etc/GMT+7", -25200],
-  ["Etc/GMT+8", -28800],
-  ["Etc/GMT+9", -32400],
-  ["Etc/GMT-1", 3600],
-  ["Etc/GMT-10", 36e3],
-  ["Etc/GMT-11", 39600],
-  ["Etc/GMT-12", 43200],
-  ["Etc/GMT-13", 46800],
-  ["Etc/GMT-14", 50400],
-  ["Etc/GMT-2", 7200],
-  ["Etc/GMT-3", 10800],
-  ["Etc/GMT-4", 14400],
-  ["Etc/GMT-5", 18e3],
-  ["Etc/GMT-6", 21600],
-  ["Etc/GMT-7", 25200],
-  ["Etc/GMT-8", 28800],
-  ["Etc/GMT-9", 32400],
-  ["Etc/UTC", 0],
-  ["Europe/Andorra", 3600],
-  ["Europe/Astrakhan", 14400],
-  ["Europe/Athens", 7200],
-  ["Europe/Belgrade", 3600],
-  ["Europe/Berlin", 3600],
-  ["Europe/Brussels", 3600],
-  ["Europe/Bucharest", 7200],
-  ["Europe/Budapest", 3600],
-  ["Europe/Chisinau", 7200],
-  ["Europe/Dublin", 3600],
-  ["Europe/Gibraltar", 3600],
-  ["Europe/Helsinki", 7200],
-  ["Europe/Istanbul", 10800],
-  ["Europe/Kaliningrad", 7200],
-  ["Europe/Kirov", 10800],
-  ["Europe/Kyiv", 7200],
-  ["Europe/Lisbon", 0],
-  ["Europe/London", 0],
-  ["Europe/Madrid", 3600],
-  ["Europe/Malta", 3600],
-  ["Europe/Minsk", 10800],
-  ["Europe/Moscow", 10800],
-  ["Europe/Paris", 3600],
-  ["Europe/Prague", 3600],
-  ["Europe/Riga", 7200],
-  ["Europe/Rome", 3600],
-  ["Europe/Samara", 14400],
-  ["Europe/Saratov", 14400],
-  ["Europe/Simferopol", 10800],
-  ["Europe/Sofia", 7200],
-  ["Europe/Tallinn", 7200],
-  ["Europe/Tirane", 3600],
-  ["Europe/Ulyanovsk", 14400],
-  ["Europe/Vienna", 3600],
-  ["Europe/Vilnius", 7200],
-  ["Europe/Volgograd", 10800],
-  ["Europe/Warsaw", 3600],
-  ["Europe/Zurich", 3600],
-  ["HST", -36e3],
-  ["Indian/Chagos", 21600],
-  ["Indian/Maldives", 18e3],
-  ["Indian/Mauritius", 14400],
-  ["MET", 3600],
-  ["MST", -25200],
-  ["MST7MDT", -25200],
-  ["PST8PDT", -28800],
-  ["Pacific/Apia", 46800],
-  ["Pacific/Auckland", 43200],
-  ["Pacific/Bougainville", 39600],
-  ["Pacific/Chatham", 45900],
-  ["Pacific/Easter", -21600],
-  ["Pacific/Efate", 39600],
-  ["Pacific/Fakaofo", 46800],
-  ["Pacific/Fiji", 43200],
-  ["Pacific/Galapagos", -21600],
-  ["Pacific/Gambier", -32400],
-  ["Pacific/Guadalcanal", 39600],
-  ["Pacific/Guam", 36e3],
-  ["Pacific/Honolulu", -36e3],
-  ["Pacific/Kanton", 46800],
-  ["Pacific/Kiritimati", 50400],
-  ["Pacific/Kosrae", 39600],
-  ["Pacific/Kwajalein", 43200],
-  ["Pacific/Marquesas", -34200],
-  ["Pacific/Nauru", 43200],
-  ["Pacific/Niue", -39600],
-  ["Pacific/Norfolk", 39600],
-  ["Pacific/Noumea", 39600],
-  ["Pacific/Pago_Pago", -39600],
-  ["Pacific/Palau", 32400],
-  ["Pacific/Pitcairn", -28800],
-  ["Pacific/Port_Moresby", 36e3],
-  ["Pacific/Rarotonga", -36e3],
-  ["Pacific/Tahiti", -36e3],
-  ["Pacific/Tarawa", 43200],
-  ["Pacific/Tongatapu", 46800],
-  ["WET", 0]
-]);
-
-// build/dev/javascript/birl/birl.mjs
-var Time = class extends CustomType {
-  constructor(wall_time, offset, timezone, monotonic_time) {
-    super();
-    this.wall_time = wall_time;
-    this.offset = offset;
-    this.timezone = timezone;
-    this.monotonic_time = monotonic_time;
-  }
-};
-var Mon = class extends CustomType {
-};
-var Tue = class extends CustomType {
-};
-var Wed = class extends CustomType {
-};
-var Thu = class extends CustomType {
-};
-var Fri = class extends CustomType {
-};
-var Sat = class extends CustomType {
-};
-var Sun = class extends CustomType {
-};
-var Jan = class extends CustomType {
-};
-var Feb = class extends CustomType {
-};
-var Mar = class extends CustomType {
-};
-var Apr = class extends CustomType {
-};
-var May = class extends CustomType {
-};
-var Jun = class extends CustomType {
-};
-var Jul = class extends CustomType {
-};
-var Aug = class extends CustomType {
-};
-var Sep = class extends CustomType {
-};
-var Oct = class extends CustomType {
-};
-var Nov = class extends CustomType {
-};
-var Dec = class extends CustomType {
-};
-var unix_epoch = new Time(0, 0, new None(), new None());
-var string_to_units = toList([
-  ["year", new Year()],
-  ["month", new Month()],
-  ["week", new Week()],
-  ["day", new Day()],
-  ["hour", new Hour()],
-  ["minute", new Minute()],
-  ["second", new Second()]
-]);
-var units_to_string = toList([
-  [new Year(), "year"],
-  [new Month(), "month"],
-  [new Week(), "week"],
-  [new Day(), "day"],
-  [new Hour(), "hour"],
-  [new Minute(), "minute"],
-  [new Second(), "second"]
-]);
-var weekday_strings = toList([
-  [new Mon(), ["Monday", "Mon"]],
-  [new Tue(), ["Tuesday", "Tue"]],
-  [new Wed(), ["Wednesday", "Wed"]],
-  [new Thu(), ["Thursday", "Thu"]],
-  [new Fri(), ["Friday", "Fri"]],
-  [new Sat(), ["Saturday", "Sat"]],
-  [new Sun(), ["Sunday", "Sun"]]
-]);
-var month_strings = toList([
-  [new Jan(), ["January", "Jan"]],
-  [new Feb(), ["February", "Feb"]],
-  [new Mar(), ["March", "Mar"]],
-  [new Apr(), ["April", "Apr"]],
-  [new May(), ["May", "May"]],
-  [new Jun(), ["June", "Jun"]],
-  [new Jul(), ["July", "Jul"]],
-  [new Aug(), ["August", "Aug"]],
-  [new Sep(), ["September", "Sep"]],
-  [new Oct(), ["October", "Oct"]],
-  [new Nov(), ["November", "Nov"]],
-  [new Dec(), ["December", "Dec"]]
-]);
-
 // build/dev/javascript/decipher/decipher.mjs
 function int_string(dynamic2) {
   return try$(
@@ -2245,240 +1738,20 @@ function int_string(dynamic2) {
 function text2(content) {
   return text(content);
 }
+function h1(attrs, children) {
+  return element("h1", attrs, children);
+}
 function div(attrs, children) {
   return element("div", attrs, children);
 }
-function span(attrs, children) {
-  return element("span", attrs, children);
-}
-function button(attrs, children) {
-  return element("button", attrs, children);
+function slot(attrs) {
+  return element("slot", attrs, toList([]));
 }
 
 // build/dev/javascript/lustre/lustre/event.mjs
 function emit2(event2, data) {
   return event(event2, data);
 }
-function on2(name2, handler) {
-  return on(name2, handler);
-}
-function on_click(msg) {
-  return on2("click", (_) => {
-    return new Ok(msg);
-  });
-}
-
-// build/dev/javascript/lustre_ui/lustre/ui/button.mjs
-function button2(attributes, children) {
-  return button(
-    prepend(
-      class$("lustre-ui-button"),
-      prepend(type_("button"), attributes)
-    ),
-    children
-  );
-}
-
-// build/dev/javascript/lustre_ui/lustre/ui/layout/stack.mjs
-function of(element3, attributes, children) {
-  return element3(
-    prepend(class$("lustre-ui-stack"), attributes),
-    children
-  );
-}
-function stack(attributes, children) {
-  return of(div, attributes, children);
-}
-
-// build/dev/javascript/lustre_ui/lustre/ui/layout/centre.mjs
-function of2(element3, attributes, children) {
-  return element3(
-    prepend(class$("lustre-ui-centre"), attributes),
-    toList([children])
-  );
-}
-function centre(attributes, children) {
-  return of2(div, attributes, children);
-}
-
-// build/dev/javascript/gleam_community_colour/gleam_community/colour.mjs
-var Rgba = class extends CustomType {
-  constructor(r, g, b, a) {
-    super();
-    this.r = r;
-    this.g = g;
-    this.b = b;
-    this.a = a;
-  }
-};
-var light_red = new Rgba(
-  0.9372549019607843,
-  0.1607843137254902,
-  0.1607843137254902,
-  1
-);
-var red = new Rgba(0.8, 0, 0, 1);
-var dark_red = new Rgba(0.6431372549019608, 0, 0, 1);
-var light_orange = new Rgba(
-  0.9882352941176471,
-  0.6862745098039216,
-  0.24313725490196078,
-  1
-);
-var orange = new Rgba(0.9607843137254902, 0.4745098039215686, 0, 1);
-var dark_orange = new Rgba(
-  0.807843137254902,
-  0.3607843137254902,
-  0,
-  1
-);
-var light_yellow = new Rgba(
-  1,
-  0.9137254901960784,
-  0.30980392156862746,
-  1
-);
-var yellow = new Rgba(0.9294117647058824, 0.8313725490196079, 0, 1);
-var dark_yellow = new Rgba(
-  0.7686274509803922,
-  0.6274509803921569,
-  0,
-  1
-);
-var light_green = new Rgba(
-  0.5411764705882353,
-  0.8862745098039215,
-  0.20392156862745098,
-  1
-);
-var green = new Rgba(
-  0.45098039215686275,
-  0.8235294117647058,
-  0.08627450980392157,
-  1
-);
-var dark_green = new Rgba(
-  0.3058823529411765,
-  0.6039215686274509,
-  0.023529411764705882,
-  1
-);
-var light_blue = new Rgba(
-  0.4470588235294118,
-  0.6235294117647059,
-  0.8117647058823529,
-  1
-);
-var blue = new Rgba(
-  0.20392156862745098,
-  0.396078431372549,
-  0.6431372549019608,
-  1
-);
-var dark_blue = new Rgba(
-  0.12549019607843137,
-  0.2901960784313726,
-  0.5294117647058824,
-  1
-);
-var light_purple = new Rgba(
-  0.6784313725490196,
-  0.4980392156862745,
-  0.6588235294117647,
-  1
-);
-var purple = new Rgba(
-  0.4588235294117647,
-  0.3137254901960784,
-  0.4823529411764706,
-  1
-);
-var dark_purple = new Rgba(
-  0.3607843137254902,
-  0.20784313725490197,
-  0.4,
-  1
-);
-var light_brown = new Rgba(
-  0.9137254901960784,
-  0.7254901960784313,
-  0.43137254901960786,
-  1
-);
-var brown = new Rgba(
-  0.7568627450980392,
-  0.49019607843137253,
-  0.06666666666666667,
-  1
-);
-var dark_brown = new Rgba(
-  0.5607843137254902,
-  0.34901960784313724,
-  0.00784313725490196,
-  1
-);
-var black = new Rgba(0, 0, 0, 1);
-var white = new Rgba(1, 1, 1, 1);
-var light_grey = new Rgba(
-  0.9333333333333333,
-  0.9333333333333333,
-  0.9254901960784314,
-  1
-);
-var grey = new Rgba(
-  0.8274509803921568,
-  0.8431372549019608,
-  0.8117647058823529,
-  1
-);
-var dark_grey = new Rgba(
-  0.7294117647058823,
-  0.7411764705882353,
-  0.7137254901960784,
-  1
-);
-var light_gray = new Rgba(
-  0.9333333333333333,
-  0.9333333333333333,
-  0.9254901960784314,
-  1
-);
-var gray = new Rgba(
-  0.8274509803921568,
-  0.8431372549019608,
-  0.8117647058823529,
-  1
-);
-var dark_gray = new Rgba(
-  0.7294117647058823,
-  0.7411764705882353,
-  0.7137254901960784,
-  1
-);
-var light_charcoal = new Rgba(
-  0.5333333333333333,
-  0.5411764705882353,
-  0.5215686274509804,
-  1
-);
-var charcoal = new Rgba(
-  0.3333333333333333,
-  0.3411764705882353,
-  0.3254901960784314,
-  1
-);
-var dark_charcoal = new Rgba(
-  0.1803921568627451,
-  0.20392156862745098,
-  0.21176470588235294,
-  1
-);
-var pink = new Rgba(1, 0.6862745098039216, 0.9529411764705882, 1);
-
-// build/dev/javascript/lustre_ui/lustre/ui.mjs
-var button3 = button2;
-var centre2 = centre;
-var stack2 = stack;
 
 // build/dev/javascript/common/common/counter.mjs
 var Incr = class extends CustomType {
@@ -2528,23 +1801,12 @@ function on_attribute_change() {
     ])
   );
 }
-function view(model) {
-  let count = to_string2(model);
-  return stack2(
+function view(_) {
+  return div(
     toList([]),
     toList([
-      button3(
-        toList([on_click(new Incr())]),
-        toList([text2("+")])
-      ),
-      centre2(
-        toList([]),
-        span(toList([]), toList([text2(count)]))
-      ),
-      button3(
-        toList([on_click(new Decr())]),
-        toList([text2("-")])
-      )
+      h1(toList([]), toList([text2("Here is the message:")])),
+      slot(toList([]))
     ])
   );
 }

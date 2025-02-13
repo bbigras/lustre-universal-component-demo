@@ -73,12 +73,6 @@ pub fn on_attribute_change() -> Dict(String, Decoder(Msg)) {
 
 // VIEW ------------------------------------------------------------------------
 
-pub fn view(model: Model) -> Element(Msg) {
-  let count = int.to_string(model)
-
-  ui.stack([], [
-    ui.button([event.on_click(Incr)], [html.text("+")]),
-    ui.centre([], html.span([], [html.text(count)])),
-    ui.button([event.on_click(Decr)], [html.text("-")]),
-  ])
+fn view(_) {
+  html.div([], [html.h1([], [html.text("Here is the message:")]), html.slot([])])
 }
